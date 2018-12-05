@@ -15,7 +15,8 @@ var minValue = 0
 var maxValue = 10
 var deviceId = "3EgKDoiUS08sxoJof7lnD6"
 var topicBase = "v1/" + deviceId + "/"
-var datanodeID = "";
+var datanodeIDRandomNumber = "";
+var datanodeIDcommand = "";
 
 var options = {
   port: PORT,
@@ -38,11 +39,8 @@ function publish(requestJson, topic, needReqNumber = true){
 	    reqIdNumber += 1
 	}
 	client.publish(topic, JSON.stringify(requestJson), function (err){
-        if(!err){
-		    console.log("Publish success")
-	    }
-	    else {
-    	    console.log("Fail ", err)
+        if(err){
+    	    console.log("Fail to publish", err)
 	    }
     })
 	
@@ -50,17 +48,13 @@ function publish(requestJson, topic, needReqNumber = true){
 
 // Function generates a random number based on the configuration and publish the message
 function send_random_number(){
-    if (datanodeID == ""){
-		create_datanode("Random_Number", "JS/data", "R" ,"DOUBLE", "true")
-		return
-	}
 	var min = Math.ceil(minValue);
     var max = Math.floor(maxValue);
     var myRandom = Math.floor(Math.random() * (max - min + 1)) + min;
 	var date = new Date();
     var timestamp = date.getTime();
 	var request = {}
-	request[datanodeID] = [{
+	request[datanodeIDRandomNumber] = [{
 		"v" : myRandom.toString(),
 		"dt" : "DOUBLE",
 		"ts" : timestamp.toString(),
@@ -108,7 +102,7 @@ function config_file_exist_test(){
 	publish(request, topicBase + "evt/request/resource/files/listing" )
 }
 
-// Function resquest a file by fileName and version.
+// Function resquests a file by fileName and version.
 function request_file(fileName, version){
 	var request = {
 		"fileName" : fileName,
@@ -118,14 +112,55 @@ function request_file(fileName, version){
 	publish(request, topicBase + "evt/request/resource/files")
 }
 
+function log_light_value(value){
+	if(value != null){
+		if(value == "true"){
+			console.log("Turn on the light!")
+		} else {
+			console.log("Turn off the light!")
+		}
+	}
+}
+
+// Function finds the datanode ID from a list of datanodes
+function find_datanodID_from_answer(messageJson, datanodeName, datanodePath){
+	for(var i = 0; i < messageJson["d"].length ; i++){
+		if(messageJson["d"][i]["name"] == datanodeName && messageJson["d"][i]["path"] == datanodePath){
+			return messageJson["d"][i]["mid"]
+	    }
+	}
+	return ""
+	
+}
+
+// Function finds the value of a datanode in a list of datanodes. It happens when the server sends a command.
+function find_value_from_command(messageJson, datanodeID){
+	for(var i = 0; i < messageJson["d"].length ; i++){
+		if(messageJson["d"][i]["mid"] == datanodeID){
+			return messageJson["d"][i]["value"]
+		}
+	}
+	return null
+}
+
 // Function that receives the messages from the subscribed topics
 client.on('message', function (topic, message) {
 	message = message.toString()
 	var messageJson = JSON.parse(message)
 	if(topic == topicBase + 'evt/response/resource/datanodes'){ // Response to requests about datanodes
-	    if(messageJson["d"].length != 0){
-	        datanodeID = messageJson["d"][0]["mid"]
+	    if(datanodeIDRandomNumber == ""){
+	        datanodeIDRandomNumber = find_datanodID_from_answer(messageJson, "Random_Number", "JS/data")
+		    if(datanodeIDRandomNumber == ""){
+				create_datanode("Random_Number", "JS/data", "R" ,"DOUBLE", "true")
+			}
 		}
+	    if(datanodeIDcommand == ""){
+	        datanodeIDcommand = find_datanodID_from_answer(messageJson, "Light", "home/kitchen")
+		    if(datanodeIDcommand == ""){
+				create_datanode("Light", "home/kitchen", "n/a" ,"BOOLEAN", "true")
+			}
+		}
+		
     } else if (topic == topicBase + "evt/response/resource/files/listing"){ // Response to file list request
 		if(messageJson["d"].length != 0){
 		    request_file(messageJson["d"][0]["fileName"], messageJson["d"][0]["version"])
@@ -136,6 +171,15 @@ client.on('message', function (topic, message) {
 	    if(messageJson["fileType"] == "CONFIGURATION"){
 			request_file(messageJson["fileName"], messageJson["version"])
 		}
+	} else if (topic == topicBase + "cmd/control"){
+		var value = find_value_from_command(messageJson, datanodeIDcommand)
+		log_light_value(value)
+	    var response = {
+			"rc" : "200",
+			"message" : "OK",
+			"reqId" : messageJson["reqId"]
+		}
+		publish(response, topicBase + "cmd/response", false)
 	}
 })
 
@@ -146,6 +190,7 @@ client.on('connect', function () {
     client.subscribe(topicBase + "evt/response/resource/files/listing")
     client.subscribe(topicBase + "evt/response/resource/files")
     client.subscribe(topicBase + "evt/updated/resource/files")
+	client.subscribe(topicBase + "cmd/control")
     config_file_exist_test()
     var emptyrequest = {}
     publish(emptyrequest, topicBase + "evt/request/resource/datanodes")
